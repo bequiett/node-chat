@@ -245,7 +245,7 @@ export async function DELETE(req: NextRequest) {
     return NextResponse.json({ error: "Friendship not found" }, { status: 404 });
   }
 
-  await removeFriendship(session.userId, targetUserId);
+  await removeFriendship(session.userId, targetUserId, false);
 
   return NextResponse.json({
     ok: true,
@@ -324,7 +324,7 @@ async function ensureFriendship(userA: string, userB: string, roomId: string) {
   ]);
 }
 
-async function removeFriendship(userA: string, userB: string) {
+async function removeFriendship(userA: string, userB: string, removeRoomMembers = true) {
   const aId = new mongoose.Types.ObjectId(userA);
   const bId = new mongoose.Types.ObjectId(userB);
 
@@ -342,7 +342,7 @@ async function removeFriendship(userA: string, userB: string) {
     { $project: { roomId: "$_id" } },
   ]);
   const sharedRoomIds = sharedRooms.map((r) => r.roomId);
-  if (sharedRoomIds.length) {
+  if (removeRoomMembers && sharedRoomIds.length) {
     await RoomMember.deleteMany({
       roomId: { $in: sharedRoomIds },
       userId: { $in: [aId, bId] },

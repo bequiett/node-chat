@@ -5,7 +5,7 @@ import { Providers } from "./providers";
 
 export const metadata: Metadata = {
   title: "NodeChat",
-  description: "Responsive chat interface built with Next.js",
+  description: "Secure chatting with Next.js",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

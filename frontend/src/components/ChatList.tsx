@@ -12,15 +12,17 @@ export interface ChatSummary {
   timestamp: string;
   unread?: number;
   type?: "direct" | "group";
+  peerId?: string;
 }
 
 interface ChatListProps {
   chats: ChatSummary[];
   selectedChatId: string | null;
   onSelectChat: (id: string) => void;
+  onLeaveChat?: (chat: ChatSummary) => void;
 }
 
-export function ChatList({ chats, selectedChatId, onSelectChat }: ChatListProps) {
+export function ChatList({ chats, selectedChatId, onSelectChat, onLeaveChat }: ChatListProps) {
   return (
     <div className="h-full overflow-y-auto">
       <div className="space-y-2 p-4">
@@ -33,6 +35,10 @@ export function ChatList({ chats, selectedChatId, onSelectChat }: ChatListProps)
               selectedChatId === chat.id && "bg-accent",
             )}
             onClick={() => onSelectChat(chat.id)}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              onLeaveChat?.(chat);
+            }}
           >
             <div className="flex items-start gap-3">
               <Avatar>

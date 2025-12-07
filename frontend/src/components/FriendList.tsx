@@ -115,7 +115,6 @@ export function FriendList({ friends, onAddFriend, onDeleteFriend, onStartChat }
                           variant="ghost"
                           aria-label={`${friend.name}과 대화`}
                           onClick={() => onStartChat(friend)}
-                          disabled={!friend.roomId}
                         >
                           💬
                         </Button>

@@ -7,11 +7,13 @@ import { IoSend } from "react-icons/io5";
 
 interface MessageInputProps {
   onSendMessage: (content: string) => void;
+  disabled?: boolean;
+  disabledReason?: string;
 }
 
 const MAX_VISIBLE_LINES = 5;
 
-export function MessageInput({ onSendMessage }: MessageInputProps) {
+export function MessageInput({ onSendMessage, disabled, disabledReason }: MessageInputProps) {
   const [message, setMessage] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -39,6 +41,7 @@ export function MessageInput({ onSendMessage }: MessageInputProps) {
   }, [message]);
 
   const sendMessage = () => {
+    if (disabled) return;
     if (!message.trim()) return;
     onSendMessage(message.trim());
     setMessage("");
@@ -57,6 +60,7 @@ export function MessageInput({ onSendMessage }: MessageInputProps) {
               sendMessage();
             }
           }}
+          disabled={disabled}
           rows={1}
           placeholder="메시지를 입력하세요..."
           className="flex-1 resize-none rounded-xl text-sm leading-tight"
@@ -69,10 +73,14 @@ export function MessageInput({ onSendMessage }: MessageInputProps) {
           onClick={sendMessage}
           aria-label="메시지 전송"
           className="h-10 w-10"
+          disabled={disabled}
         >
           <IoSend size={18} />
         </Button>
       </div>
+      {disabled && disabledReason ? (
+        <p className="mt-2 text-xs text-muted-foreground">{disabledReason}</p>
+      ) : null}
     </div>
   );
 }

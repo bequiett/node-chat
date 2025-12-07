@@ -19,9 +19,10 @@ interface ChatWindowProps {
   chatAvatar?: string;
   messages: ChatMessage[];
   subtitle?: string;
+  infoMessage?: string;
 }
 
-export function ChatWindow({ chatName, chatAvatar, messages, subtitle }: ChatWindowProps) {
+export function ChatWindow({ chatName, chatAvatar, messages, subtitle, infoMessage }: ChatWindowProps) {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -47,6 +48,11 @@ export function ChatWindow({ chatName, chatAvatar, messages, subtitle }: ChatWin
       </div>
 
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4">
+        {infoMessage ? (
+          <div className="rounded-md border border-dashed border-muted-foreground/40 bg-muted/30 p-3 text-sm text-muted-foreground">
+            {infoMessage}
+          </div>
+        ) : null}
         {messages.length === 0 ? (
           <p className="text-center text-sm text-muted-foreground">
             아직 메시지가 없습니다. 첫 메시지를 보내보세요!

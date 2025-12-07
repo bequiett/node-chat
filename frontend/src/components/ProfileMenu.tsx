@@ -34,9 +34,6 @@ export function ProfileMenu({ name, image }: Props) {
       <DropdownMenuContent align="end" className="w-52">
         <DropdownMenuLabel>{name ?? "사용자"}</DropdownMenuLabel>
         <DropdownMenuSeparator />
-        <DropdownMenuItem asChild>
-          <Link href="/chat">프로필 설정</Link>
-        </DropdownMenuItem>
         <DropdownMenuItem
           className="text-rose-600 focus:text-rose-600"
           onClick={() => signOut({ callbackUrl: "/" })}

@@ -4,6 +4,7 @@ import { requireAuth } from "@/lib/auth-guard";
 import { connectMongo } from "@/lib/mongoose";
 import { ChatRoom } from "@/models/ChatRoom";
 import { RoomMember } from "@/models/RoomMember";
+import { Friend } from "@/models/Friend";
 
 export const runtime = "nodejs";
 
@@ -132,6 +133,14 @@ export async function POST(req: NextRequest) {
         type: "direct",
       }).lean<{ _id: Types.ObjectId; type: "direct"; title?: string | null } | null>();
       if (existing) {
+        await Friend.updateOne(
+          { userId: session.userId, friendId: otherId },
+          { $set: { roomId: existing._id } },
+        );
+        await Friend.updateOne(
+          { userId: otherId, friendId: session.userId },
+          { $set: { roomId: existing._id } },
+        );
         return NextResponse.json({
           room: { id: existing._id.toString(), type: existing.type, title: existing.title },
           reused: true,
@@ -146,6 +155,14 @@ export async function POST(req: NextRequest) {
       { roomId: room._id, userId: session.userId, role: "member" },
       { roomId: room._id, userId: otherId, role: "member" },
     ]);
+    await Friend.updateOne(
+      { userId: session.userId, friendId: otherId },
+      { $set: { roomId: room._id } },
+    );
+    await Friend.updateOne(
+      { userId: otherId, friendId: session.userId },
+      { $set: { roomId: room._id } },
+    );
 
     return NextResponse.json({
       room: { id: room._id.toString(), type: room.type, title: room.title },

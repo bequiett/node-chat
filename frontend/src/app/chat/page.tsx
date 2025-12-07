@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signOut, useSession } from "next-auth/react";
 import { ChatList, type ChatSummary } from "@/components/ChatList";
@@ -75,9 +75,57 @@ export default function ChatPage() {
     retentionDays: 30,
     encryptionEnabled: true,
   });
+  const [wsVersion, setWsVersion] = useState(0);
+  const [showGroupCreator, setShowGroupCreator] = useState(false);
+  const [groupTitle, setGroupTitle] = useState("");
+  const [groupMemberIds, setGroupMemberIds] = useState<string[]>([]);
+  const [isCreatingGroup, setIsCreatingGroup] = useState(false);
 
   const storageKey = (userId: string) => `chatMessages:${userId}`;
   const settingsKey = "chatStorageSettings";
+  const bumpWsVersion = useCallback(() => setWsVersion((v) => v + 1), []);
+
+  const refreshRooms = useCallback(async () => {
+    try {
+      if (!isAuthenticated) return;
+      const res = await fetch("/api/rooms");
+      if (!res.ok) throw new Error("채팅방을 불러오지 못했습니다");
+      const data = (await res.json()) as RoomResponse;
+
+      const mapped: ChatSummary[] = data.rooms.map((room) => ({
+        id: room.id,
+        type: room.type,
+        name:
+          room.title ||
+          room.peer?.displayName ||
+          room.peer?.friendId ||
+          (room.type === "direct" ? "Direct Chat" : "Group chat"),
+        peerId: room.peer?.id,
+        avatar: room.peer?.avatarUrl,
+        lastMessage: room.lastMessageMeta?.previewText || "새 대화를 시작하세요",
+        timestamp: room.lastMessageMeta?.sentAt
+          ? new Date(room.lastMessageMeta.sentAt).toLocaleTimeString("ko-KR", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })
+          : "",
+      }));
+
+      setChats((prev) => {
+        // keep existing selections and unread counts if room already present
+        const prevMap = new Map(prev.map((c) => [c.id, c]));
+        const merged = mapped.map((chat) => {
+          const prevChat = prevMap.get(chat.id);
+          return prevChat ? { ...chat, unread: prevChat.unread } : chat;
+        });
+        return merged;
+      });
+      setSelectedChatId((prev) => prev ?? mapped[0]?.id ?? null);
+      setFetchError(null);
+    } catch (error) {
+      setFetchError(error instanceof Error ? error.message : "목록을 불러오지 못했습니다");
+    }
+  }, [isAuthenticated]);
 
   const sanitizeRetentionDays = (value: number) => {
     if (!Number.isFinite(value)) return 30;
@@ -167,48 +215,8 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-
-    const loadRooms = async () => {
-      try {
-        if (!isAuthenticated) return;
-        const res = await fetch("/api/rooms");
-        if (!res.ok) throw new Error("채팅방을 불러오지 못했습니다");
-        const data = (await res.json()) as RoomResponse;
-        if (cancelled) return;
-
-        const mapped: ChatSummary[] = data.rooms.map((room) => ({
-          id: room.id,
-          type: room.type,
-          name:
-            room.title ||
-            room.peer?.displayName ||
-            room.peer?.friendId ||
-            (room.type === "direct" ? "Direct Chat" : "Group chat"),
-          avatar: room.peer?.avatarUrl,
-          lastMessage: room.lastMessageMeta?.previewText || "새 대화를 시작하세요",
-          timestamp: room.lastMessageMeta?.sentAt
-            ? new Date(room.lastMessageMeta.sentAt).toLocaleTimeString("ko-KR", {
-                hour: "2-digit",
-                minute: "2-digit",
-              })
-            : "",
-        }));
-
-        setChats(mapped);
-        setSelectedChatId(mapped[0]?.id ?? null);
-        setFetchError(null);
-      } catch (error) {
-        if (cancelled) return;
-        setFetchError(error instanceof Error ? error.message : "목록을 불러오지 못했습니다");
-      }
-    };
-
-    loadRooms();
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated]);
+    refreshRooms();
+  }, [refreshRooms]);
 
   useEffect(() => {
     let cancelled = false;
@@ -251,6 +259,7 @@ export default function ChatPage() {
     if (!authChecked) return;
     let activeSocket: WebSocket | null = null;
     let aborted = false;
+    reconnectAttemptsRef.current = 0;
 
     const clearReconnectTimer = () => {
       if (reconnectTimerRef.current) {
@@ -285,6 +294,7 @@ export default function ChatPage() {
 
         ws.onopen = () => {
           reconnectAttemptsRef.current = 0;
+          joinedRoomsRef.current.clear();
           setSocket(ws);
           setWsError(null);
         };
@@ -314,7 +324,7 @@ export default function ChatPage() {
       clearReconnectTimer();
       activeSocket?.close();
     };
-  }, [authChecked]);
+  }, [authChecked, wsVersion]);
 
   useEffect(() => {
     if (!socket || socket.readyState !== WebSocket.OPEN) return;
@@ -405,6 +415,7 @@ export default function ChatPage() {
           };
 
           const chatMeta = chats.find((chat) => chat.id === roomId);
+          const peerMeta = friends.find((f) => f.roomId === roomId);
           const content =
             typeof payload === "object" && payload !== null && "text" in payload
               ? String((payload as Record<string, unknown>).text)
@@ -415,6 +426,8 @@ export default function ChatPage() {
           const ts = sentAt ? new Date(sentAt) : new Date();
           const timestamp = ts.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
           const isSelf = senderId === selfId;
+          const senderName = !isSelf ? peerMeta?.name ?? chatMeta?.name ?? "새 대화" : undefined;
+          const senderAvatar = !isSelf ? peerMeta?.avatar ?? chatMeta?.avatar : undefined;
 
           setMessages((prev) => {
             const roomMessages = prev[roomId] ?? [];
@@ -425,8 +438,8 @@ export default function ChatPage() {
               sender: isSelf ? "user" : "other",
               timestamp,
               sentAt: ts.getTime(),
-              senderAvatar: !isSelf ? chatMeta?.avatar : undefined,
-              senderName: !isSelf ? chatMeta?.name : undefined,
+              senderAvatar,
+              senderName,
             };
             return {
               ...prev,
@@ -434,18 +447,46 @@ export default function ChatPage() {
             };
           });
 
+          setChats((prev) => {
+            const existing = prev.find((chat) => chat.id === roomId);
+            const isUnread = !isSelf && roomId !== selectedChatId;
+            const baseChat: ChatSummary =
+              existing ??
+              ({
+                id: roomId,
+                type: chatMeta?.type ?? "direct",
+                peerId: peerMeta?.id ?? chatMeta?.peerId,
+                name:
+                  peerMeta?.name ?? chatMeta?.name ?? senderName ?? "새 대화",
+                avatar: peerMeta?.avatar ?? chatMeta?.avatar ?? senderAvatar,
+                lastMessage: "",
+                timestamp: "",
+              } as ChatSummary);
+
+            const updated: ChatSummary = {
+              ...baseChat,
+              lastMessage: content,
+              timestamp: "방금",
+              unread: isUnread ? (baseChat.unread ?? 0) + 1 : baseChat.unread,
+            };
+
+            if (existing) {
+              return prev.map((chat) => (chat.id === roomId ? updated : chat));
+            }
+            return [updated, ...prev];
+          });
+        } else if (data.type === "ROOM_EVENT") {
+          const payloadUserId = (data.payload as any)?.userId as string | undefined;
           setChats((prev) =>
             prev.map((chat) => {
-              if (chat.id !== roomId) return chat;
-              const isUnread = !isSelf && roomId !== selectedChatId;
-              return {
-                ...chat,
-                lastMessage: content,
-                timestamp: "방금",
-                unread: isUnread ? (chat.unread ?? 0) + 1 : chat.unread,
-              };
+              if (chat.id !== data.roomId) return chat;
+              if (chat.type === "direct" && payloadUserId && payloadUserId !== selfId) {
+                return { ...chat, peerId: undefined };
+              }
+              return chat;
             }),
           );
+          refreshRooms();
         }
       } catch {
         // ignore malformed messages
@@ -454,12 +495,13 @@ export default function ChatPage() {
 
     socket.addEventListener("message", onMessage);
     return () => socket.removeEventListener("message", onMessage);
-  }, [socket, selfId, selectedChatId, chats]);
+  }, [socket, selfId, selectedChatId, chats, friends, refreshRooms]);
 
   useEffect(() => {
     if (!socket) return;
     const onFriendNotify = () => {
       fetchFriendRequests();
+      refreshRooms();
     };
     const onMessage = (event: MessageEvent) => {
       try {
@@ -473,12 +515,13 @@ export default function ChatPage() {
     };
     socket.addEventListener("message", onMessage);
     return () => socket.removeEventListener("message", onMessage);
-  }, [socket]);
+  }, [socket, refreshRooms]);
 
   const selectedChat = useMemo(
     () => chats.find((chat) => chat.id === selectedChatId) ?? null,
     [chats, selectedChatId],
   );
+  const peerDeparted = selectedChat?.type === "direct" && !selectedChat?.peerId;
 
   const persistMessage = async (roomId: string, content: string, messageId: string) => {
     try {
@@ -498,13 +541,64 @@ export default function ChatPage() {
     }
   };
 
-  const handleSendMessage = (content: string) => {
+  const handleSendMessage = async (content: string) => {
     if (!selectedChatId || !selectedChat || !authChecked) return;
     if (socket?.readyState !== WebSocket.OPEN) {
       toast.error("메시지를 보낼 수 없습니다.", {
         description: "연결 상태를 확인한 뒤 다시 시도해주세요.",
       });
       return;
+    }
+    if (selectedChat.type === "direct" && !selectedChat.peerId) {
+      toast.error("상대방이 나간 채팅방입니다. 새로 대화를 시작해주세요.");
+      return;
+    }
+
+    let targetRoomId = selectedChatId;
+    let peerId: string | undefined;
+    if (selectedChat.type === "direct") {
+      peerId =
+        selectedChat.peerId ||
+        friends.find((f) => f.roomId === selectedChatId)?.id ||
+        friends.find((f) => f.roomId === selectedChatId || f.id === selectedChat.peerId)?.id;
+      if (peerId) {
+        try {
+          const ensured = await ensureDirectRoom(peerId);
+          if (ensured.room.id !== selectedChatId) {
+            targetRoomId = ensured.room.id;
+            setChats((prev) => {
+              const exists = prev.some((c) => c.id === targetRoomId);
+              if (exists) return prev;
+              const peer = friends.find((f) => f.id === peerId);
+              const newChat: ChatSummary = {
+                id: targetRoomId,
+                type: "direct",
+                peerId,
+                name: peer?.name ?? selectedChat.name,
+                avatar: peer?.avatar ?? selectedChat.avatar,
+                lastMessage: "대화를 시작해보세요",
+                timestamp: "방금",
+              };
+              return [newChat, ...prev];
+            });
+            setMessages((prev) => ({ ...prev, [targetRoomId]: prev[targetRoomId] ?? [] }));
+            setSelectedChatId(targetRoomId);
+            bumpWsVersion();
+            if (socket?.readyState === WebSocket.OPEN) {
+              socket.send(
+                JSON.stringify({
+                  type: "FRIEND_NOTIFY",
+                  targetUserId: peerId,
+                  payload: { kind: "chat_created", roomId: targetRoomId },
+                }),
+              );
+            }
+          }
+        } catch (error) {
+          toast.error(error instanceof Error ? error.message : "채팅방을 생성하지 못했습니다");
+          return;
+        }
+      }
     }
 
     const messageId = crypto.randomUUID();
@@ -518,12 +612,12 @@ export default function ChatPage() {
 
     setMessages((prev) => ({
       ...prev,
-      [selectedChatId]: [...(prev[selectedChatId] ?? []), newMessage],
+      [targetRoomId]: [...(prev[targetRoomId] ?? []), newMessage],
     }));
 
     setChats((prev) =>
       prev.map((chat) =>
-        chat.id === selectedChatId
+        chat.id === targetRoomId
           ? { ...chat, lastMessage: content, timestamp: "방금", unread: undefined }
           : chat,
       ),
@@ -533,14 +627,49 @@ export default function ChatPage() {
       socket.send(
         JSON.stringify({
           type: "NEW_MESSAGE",
-          roomId: selectedChatId,
+          roomId: targetRoomId,
           messageId,
           payload: { text: content },
         }),
       );
     }
 
-    void persistMessage(selectedChatId, content, messageId);
+    void persistMessage(targetRoomId, content, messageId);
+  };
+
+  const handleLeaveChat = async (chat: ChatSummary) => {
+    const confirmLeave = window.confirm(`"${chat.name}" 채팅방에서 나가시겠습니까?`);
+    if (!confirmLeave) return;
+    try {
+      const res = await fetch(`/api/rooms/${chat.id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const error = await res.json().catch(() => null);
+        throw new Error(error?.error ?? "채팅방을 나가지 못했습니다");
+      }
+      setChats((prev) => prev.filter((c) => c.id !== chat.id));
+      setMessages((prev) => {
+        const next = { ...prev };
+        delete next[chat.id];
+        return next;
+      });
+      joinedRoomsRef.current.delete(chat.id);
+      setSelectedChatId((prev) => (prev === chat.id ? null : prev));
+      bumpWsVersion();
+      await refreshRooms();
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "ROOM_EVENT",
+            roomId: chat.id,
+            action: "left",
+            payload: { userId: session?.user?.id },
+          }),
+        );
+      }
+      toast("채팅방에서 나갔습니다.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "채팅방을 나가지 못했습니다");
+    }
   };
 
   const handleSelectChat = (chatId: string) => {
@@ -575,7 +704,18 @@ export default function ChatPage() {
       }
       // refresh requests/room data
       fetchFriendRequests();
+      await refreshRooms();
+      bumpWsVersion();
       toast("친구를 삭제했습니다.");
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(
+          JSON.stringify({
+            type: "FRIEND_NOTIFY",
+            targetUserId: friendId,
+            payload: { kind: "friend_removed" },
+          }),
+        );
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : "친구 삭제에 실패했습니다");
     }
@@ -674,6 +814,7 @@ export default function ChatPage() {
       }
       const data = await res.json();
       fetchFriendRequests();
+      const directRoomId = action === "accept" ? (data.directRoomId as string | undefined) : undefined;
       if (action === "accept") {
         const accepted =
           requests.incoming.find((r) => r.id === requestId)?.fromUser ??
@@ -686,11 +827,12 @@ export default function ChatPage() {
               name: accepted.displayName,
               avatar: accepted.avatarUrl,
               status: "offline",
-              roomId: data.directRoomId,
+              roomId: directRoomId,
             };
             return exists ? prev : [nextFriend, ...prev];
           });
         }
+        await refreshRooms();
       }
       const targetId = (() => {
         const incoming = requests.incoming.find((r) => r.id === requestId)?.fromUser.id;
@@ -702,7 +844,7 @@ export default function ChatPage() {
           JSON.stringify({
             type: "FRIEND_NOTIFY",
             targetUserId: targetId,
-            payload: { kind: action },
+            payload: { kind: action, roomId: directRoomId },
           }),
         );
       }
@@ -729,13 +871,44 @@ export default function ChatPage() {
     }
   };
 
-  const handleStartChat = (friend: Friend) => {
-    if (!friend.roomId) {
-      toast.error("채팅방 정보를 불러오지 못했습니다. 친구 요청을 먼저 수락하세요.");
-      return;
+  const ensureDirectRoom = async (peerId: string) => {
+    const res = await fetch("/api/rooms", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "direct", participantIds: [peerId] }),
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => null);
+      throw new Error(error?.error ?? "채팅방을 생성하지 못했습니다");
     }
+    return (await res.json()) as { room: { id: string; type: string; title?: string | null }; reused: boolean };
+  };
 
-    const chatId = friend.roomId;
+  const handleStartChat = async (friend: Friend) => {
+    let chatId = friend.roomId;
+    if (!chatId) {
+      try {
+        const created = await ensureDirectRoom(friend.id);
+        chatId = created.room.id;
+        await refreshRooms();
+        bumpWsVersion();
+        setFriends((prev) =>
+          prev.map((f) => (f.id === friend.id ? { ...f, roomId: chatId ?? undefined } : f)),
+        );
+        if (socket?.readyState === WebSocket.OPEN && friend.id) {
+          socket.send(
+            JSON.stringify({
+              type: "FRIEND_NOTIFY",
+              targetUserId: friend.id,
+              payload: { kind: "chat_created", roomId: chatId },
+            }),
+          );
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : "채팅방을 생성하지 못했습니다");
+        return;
+      }
+    }
 
     const hasChat = chats.some((chat) => chat.id === chatId);
     if (hasChat) {
@@ -747,6 +920,7 @@ export default function ChatPage() {
     const newChat: ChatSummary = {
       id: chatId,
       type: "direct",
+      peerId: friend.id,
       name: friend.name,
       avatar: friend.avatar,
       lastMessage: "대화를 시작해보세요",
@@ -763,6 +937,53 @@ export default function ChatPage() {
     setMobilePanelOpen(false);
   };
 
+  const handleCreateGroupChat = async () => {
+    if (groupMemberIds.length < 2) {
+      toast.error("그룹 채팅은 최소 2명의 친구가 필요합니다.");
+      return;
+    }
+    setIsCreatingGroup(true);
+    try {
+      const res = await fetch("/api/rooms", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "group",
+          title: groupTitle || "그룹 채팅",
+          participantIds: groupMemberIds,
+        }),
+      });
+      if (!res.ok) {
+        const error = await res.json().catch(() => null);
+        throw new Error(error?.error ?? "그룹 채팅을 만들지 못했습니다");
+      }
+      const data = await res.json();
+      await refreshRooms();
+      bumpWsVersion();
+      setSelectedChatId(data.room.id);
+      setActiveTab("chats");
+      setShowGroupCreator(false);
+      setGroupTitle("");
+      setGroupMemberIds([]);
+      if (socket?.readyState === WebSocket.OPEN) {
+        groupMemberIds.forEach((uid) => {
+          socket.send(
+            JSON.stringify({
+              type: "FRIEND_NOTIFY",
+              targetUserId: uid,
+              payload: { kind: "group_created", roomId: data.room.id },
+            }),
+          );
+        });
+      }
+      toast("그룹 채팅을 생성했습니다.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "그룹 채팅을 만들지 못했습니다");
+    } finally {
+      setIsCreatingGroup(false);
+    }
+  };
+
   useEffect(() => {
     // when friends list arrives, enrich chats with peer info for direct rooms
     if (!friends.length) return;
@@ -775,6 +996,7 @@ export default function ChatPage() {
               ...chat,
               name: matched.name,
               avatar: matched.avatar,
+              peerId: matched.id,
             };
           }
         }
@@ -904,8 +1126,60 @@ export default function ChatPage() {
           </TabsList>
         </div>
         <TabsContent value="chats" className="flex-1 overflow-hidden">
+          <div className="flex items-center justify-between px-4 pb-2">
+            <Button size="sm" variant="secondary" onClick={() => setShowGroupCreator((v) => !v)}>
+              {showGroupCreator ? "그룹 만들기 닫기" : "그룹 채팅 생성"}
+            </Button>
+          </div>
+          {showGroupCreator ? (
+            <div className="space-y-3 px-4 pb-2">
+              <Input
+                placeholder="그룹 이름 (선택)"
+                value={groupTitle}
+                onChange={(e) => setGroupTitle(e.target.value)}
+              />
+              <div className="rounded-md border p-3 text-sm">
+                <p className="mb-2 text-xs text-muted-foreground">참여자 선택 (최소 2명)</p>
+                <div className="max-h-40 space-y-2 overflow-y-auto pr-1">
+                  {friends.map((f) => (
+                    <label key={f.id} className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={groupMemberIds.includes(f.id)}
+                        onChange={(e) => {
+                          setGroupMemberIds((prev) => {
+                            const next = new Set(prev);
+                            if (e.target.checked) next.add(f.id);
+                            else next.delete(f.id);
+                            return Array.from(next);
+                          });
+                        }}
+                      />
+                      <span className="truncate">{f.name}</span>
+                    </label>
+                  ))}
+                  {friends.length === 0 ? (
+                    <p className="text-xs text-muted-foreground">친구가 없습니다.</p>
+                  ) : null}
+                </div>
+              </div>
+              <div className="flex justify-end gap-2">
+                <Button size="sm" variant="ghost" onClick={() => setShowGroupCreator(false)}>
+                  취소
+                </Button>
+                <Button size="sm" onClick={() => handleCreateGroupChat()} disabled={isCreatingGroup}>
+                  {isCreatingGroup ? "생성 중..." : "생성"}
+                </Button>
+              </div>
+            </div>
+          ) : null}
           {chats.length ? (
-            <ChatList chats={chats} selectedChatId={selectedChatId} onSelectChat={handleSelectChat} />
+            <ChatList
+              chats={chats}
+              selectedChatId={selectedChatId}
+              onSelectChat={handleSelectChat}
+              onLeaveChat={handleLeaveChat}
+            />
           ) : (
             <div className="flex h-full items-center justify-center p-6 text-sm text-muted-foreground">
               등록된 채팅방이 없습니다.
@@ -1142,8 +1416,19 @@ export default function ChatPage() {
                 chatName={selectedChat.name}
                 chatAvatar={selectedChat.avatar}
                 messages={selectedChatId ? messages[selectedChatId] ?? [] : []}
+                infoMessage={
+                  peerDeparted
+                    ? "상대방이 나간 채팅방입니다. 다시 대화를 시작하려면 친구 탭에서 새 채팅을 생성하세요."
+                    : undefined
+                }
               />
-              <MessageInput onSendMessage={handleSendMessage} />
+              <MessageInput
+                onSendMessage={handleSendMessage}
+                disabled={peerDeparted}
+                disabledReason={
+                  peerDeparted ? "상대방이 나간 채팅방에서는 메시지를 보낼 수 없습니다." : undefined
+                }
+              />
             </div>
           </>
         ) : (

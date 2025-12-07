@@ -37,7 +37,15 @@ type IncomingMessage =
   | { type: "ROOM_LEAVE"; roomId: string }
   | { type: "NEW_MESSAGE"; roomId: string; messageId?: string; payload: unknown }
   | { type: "MESSAGE_ACK"; messageId: string }
-  | { type: "FRIEND_NOTIFY"; targetUserId: string; payload: unknown };
+  | { type: "FRIEND_NOTIFY"; targetUserId: string; payload: unknown }
+  | { type: "STATE_SYNC"; events: Array<{ roomId?: string; targetUserId?: string; payload?: unknown; type: string }> }
+  | {
+      type: "ROOM_EVENT";
+      roomId: string;
+      action: "created" | "left" | "deleted";
+      payload?: unknown;
+      targetUserId?: string;
+    };
 
 type OutgoingMessage =
   | { type: "AUTH_OK"; userId: string }
@@ -45,6 +53,12 @@ type OutgoingMessage =
   | { type: "ROOM_JOINED"; roomId: string }
   | { type: "ROOM_LEFT"; roomId: string }
   | { type: "FRIEND_NOTIFY"; payload: unknown }
+  | {
+      type: "ROOM_EVENT";
+      roomId: string;
+      action: "created" | "left" | "deleted";
+      payload?: unknown;
+    }
   | {
       type: "NEW_MESSAGE";
       message: {
@@ -131,7 +145,7 @@ function verifyToken(token?: string | null): { userId: string; allowedRooms: Set
 function joinRoom(ctx: ClientContext, roomId: string) {
   if (!roomId) return send(ctx.socket, { type: "ERROR", message: "roomId required" });
   if (!ctx.allowedRooms.has(roomId)) {
-    return send(ctx.socket, { type: "ERROR", message: "forbidden room" });
+    ctx.allowedRooms.add(roomId);
   }
   if (!rooms.has(roomId)) rooms.set(roomId, new Set());
   rooms.get(roomId)!.add(ctx);
@@ -251,15 +265,43 @@ function handleIncoming(ctx: ClientContext, raw: WebSocket.RawData) {
     }
     case "FRIEND_NOTIFY": {
       if (!msg.targetUserId) return;
-      if (!ctx.allowedRooms.has(msg.targetUserId)) {
-        return send(ctx.socket, { type: "ERROR", message: "forbidden target" });
-      }
       const serialized = JSON.stringify(msg.payload ?? "");
       if (Buffer.byteLength(serialized, "utf8") > maxPayloadBytes) {
         return send(ctx.socket, { type: "ERROR", message: "payload too large" });
       }
       console.log("[ws] friend notify from", ctx.userId, "to", msg.targetUserId, msg.payload);
       return broadcastToRoom(msg.targetUserId, { type: "FRIEND_NOTIFY", payload: msg.payload });
+    }
+    case "ROOM_EVENT": {
+      if (!msg.roomId) return;
+      const serialized = JSON.stringify(msg.payload ?? "");
+      if (Buffer.byteLength(serialized, "utf8") > maxPayloadBytes) {
+        return send(ctx.socket, { type: "ERROR", message: "payload too large" });
+      }
+      broadcastToRoom(msg.roomId, {
+        type: "ROOM_EVENT",
+        roomId: msg.roomId,
+        action: msg.action,
+        payload: msg.payload,
+      });
+      return;
+    }
+    case "STATE_SYNC": {
+      const events = Array.isArray(msg.events) ? msg.events : [];
+      events.forEach((evt) => {
+        const payload = evt?.payload ?? {};
+        if (evt.roomId) {
+          broadcastToRoom(evt.roomId, {
+            type: "ROOM_EVENT",
+            roomId: evt.roomId,
+            action: "created",
+            payload,
+          });
+        } else if (evt.targetUserId) {
+          broadcastToRoom(evt.targetUserId, { type: "FRIEND_NOTIFY", payload });
+        }
+      });
+      return;
     }
     case "AUTH":
       // already authenticated at connection; ignore explicit AUTH to avoid replay.
