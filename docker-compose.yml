@@ -1,0 +1,43 @@
+version: "3.9"
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        MONGODB_URI: ${MONGODB_URI}
+        AUTH_SECRET: ${AUTH_SECRET}
+        AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
+        AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
+        AUTH_GITHUB_ID: ${AUTH_GITHUB_ID}
+        AUTH_GITHUB_SECRET: ${AUTH_GITHUB_SECRET}
+        NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL}
+    restart: always
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      MONGODB_URI: ${MONGODB_URI}
+      AUTH_SECRET: ${AUTH_SECRET}
+      AUTH_GOOGLE_ID: ${AUTH_GOOGLE_ID}
+      AUTH_GOOGLE_SECRET: ${AUTH_GOOGLE_SECRET}
+      AUTH_GITHUB_ID: ${AUTH_GITHUB_ID}
+      AUTH_GITHUB_SECRET: ${AUTH_GITHUB_SECRET}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL}
+    depends_on:
+      - ws
+
+  ws:
+    build:
+      context: ./ws-server
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "${WS_PORT}:${WS_PORT}"
+    environment:
+      NODE_ENV: production
+      AUTH_SECRET: ${AUTH_SECRET}
+      WS_PORT: ${WS_PORT}
+      WS_TTL_SECONDS: ${WS_TTL_SECONDS}
+      WS_HEARTBEAT_INTERVAL_MS: ${WS_HEARTBEAT_INTERVAL_MS}
