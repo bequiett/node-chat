@@ -20,18 +20,12 @@ export async function GET() {
   const roomIds = memberships.map((m) => m.roomId);
 
   const rooms = await ChatRoom.find({ _id: { $in: roomIds } })
-    .select("_id type title ownerId lastMessageMeta createdAt updatedAt")
+    .select("_id type title ownerId createdAt updatedAt")
     .lean<{
       _id: Types.ObjectId;
       type: "direct" | "group";
       title?: string;
       ownerId?: Types.ObjectId | null;
-      lastMessageMeta?: {
-        messageId?: string;
-        sentAt?: Date;
-        senderId?: Types.ObjectId;
-        previewText?: string;
-      };
       createdAt?: Date;
       updatedAt?: Date;
     }[]>();
@@ -73,7 +67,6 @@ export async function GET() {
       type: r.type,
       title: r.title,
       ownerId: r.ownerId?.toString(),
-      lastMessageMeta: r.lastMessageMeta,
       role: memberRoles.get(r._id.toString()),
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,

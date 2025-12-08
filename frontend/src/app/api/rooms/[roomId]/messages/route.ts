@@ -1,10 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import mongoose, { type Types } from "mongoose";
+import mongoose from "mongoose";
 import { requireAuth } from "@/lib/auth-guard";
 import { connectMongo } from "@/lib/mongoose";
 import { RoomMember } from "@/models/RoomMember";
-import { Message } from "@/models/Message";
-import { ChatRoom } from "@/models/ChatRoom";
 
 export const runtime = "nodejs";
 
@@ -36,25 +34,8 @@ export async function GET(
   const denied = await ensureMembership(roomId, session.userId);
   if (denied) return denied;
 
-  const { searchParams } = new URL(req.url);
-  const limitParam = Number(searchParams.get("limit") ?? "50");
-  const limit = Number.isFinite(limitParam) ? Math.min(Math.max(limitParam, 1), 200) : 50;
-
-  const messages = await Message.find({ roomId })
-    .sort({ sentAt: -1, _id: -1 })
-    .limit(limit)
-    .lean();
-
-  return NextResponse.json({
-    messages: messages
-      .map((m) => ({
-        id: m.messageId,
-        content: m.content,
-        senderId: m.senderId.toString(),
-        sentAt: m.sentAt,
-      }))
-      .reverse(), // return newest-first but keep chronological order in array
-  });
+  // No server-side message history is stored; return empty history by design.
+  return NextResponse.json({ messages: [] });
 }
 
 export async function POST(
@@ -81,49 +62,13 @@ export async function POST(
 
   const messageId = clientMessageId || crypto.randomUUID();
 
-  const existing = await Message.findOne({ messageId, roomId }).lean<{
-    messageId: string;
-    content: string;
-    senderId: Types.ObjectId;
-    sentAt: Date;
-  }>();
-  if (existing) {
-    return NextResponse.json({
-      message: {
-        id: existing.messageId,
-        content: existing.content,
-        senderId: existing.senderId.toString(),
-        sentAt: existing.sentAt,
-      },
-      reused: true,
-    });
-  }
-
-  const message = await Message.create({
-    messageId,
-    roomId,
-    senderId: session.userId,
-    content: rawContent,
-    sentAt: new Date(),
-  });
-
-  const previewText = rawContent.slice(0, 200);
-  await ChatRoom.findByIdAndUpdate(roomId, {
-    lastMessageMeta: {
-      messageId,
-      sentAt: message.sentAt,
-      senderId: session.userId,
-      previewText,
-    },
-  }).lean();
-
+  // Accept but intentionally do not persist message content to the database.
   return NextResponse.json({
     message: {
-      id: message.messageId,
-      content: message.content,
+      id: messageId,
       senderId: session.userId,
-      sentAt: message.sentAt,
+      sentAt: new Date(),
     },
-    reused: false,
+    persisted: false,
   });
 }

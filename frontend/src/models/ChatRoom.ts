@@ -5,12 +5,6 @@ const ChatRoomSchema = new Schema(
     type: { type: String, enum: ["direct", "group"], required: true },
     title: { type: String },
     ownerId: { type: Schema.Types.ObjectId, ref: "User" },
-    lastMessageMeta: {
-      messageId: String,
-      sentAt: Date,
-      senderId: { type: Schema.Types.ObjectId, ref: "User" },
-      previewText: String,
-    },
   },
   { timestamps: true }
 );

@@ -24,12 +24,6 @@ type RoomResponse = {
     type: "direct" | "group";
     title?: string;
     peer?: { id: string; displayName?: string; avatarUrl?: string; friendId?: string };
-    lastMessageMeta?: {
-      messageId?: string;
-      sentAt?: string;
-      previewText?: string;
-      senderId?: string;
-    };
     updatedAt?: string;
   }>;
 };
@@ -84,6 +78,8 @@ export default function ChatPage() {
   const storageKey = (userId: string) => `chatMessages:${userId}`;
   const settingsKey = "chatStorageSettings";
   const bumpWsVersion = useCallback(() => setWsVersion((v) => v + 1), []);
+  const formatTimestamp = (date: Date) =>
+    date.toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
 
   const refreshRooms = useCallback(async () => {
     try {
@@ -102,13 +98,8 @@ export default function ChatPage() {
           (room.type === "direct" ? "Direct Chat" : "Group chat"),
         peerId: room.peer?.id,
         avatar: room.peer?.avatarUrl,
-        lastMessage: room.lastMessageMeta?.previewText || "새 대화를 시작하세요",
-        timestamp: room.lastMessageMeta?.sentAt
-          ? new Date(room.lastMessageMeta.sentAt).toLocaleTimeString("ko-KR", {
-              hour: "2-digit",
-              minute: "2-digit",
-            })
-          : "",
+        lastMessage: "새 대화를 시작하세요",
+        timestamp: "",
       }));
 
       setChats((prev) => {
@@ -368,7 +359,7 @@ export default function ChatPage() {
             id: String(m.id ?? m.messageId ?? crypto.randomUUID()),
             content: String(m.content ?? ""),
             sender: senderId === currentUserId ? "user" : "other",
-            timestamp: ts.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
+            timestamp: formatTimestamp(ts),
             senderName: senderId === currentUserId ? undefined : chatMeta?.name,
             senderAvatar: senderId === currentUserId ? undefined : chatMeta?.avatar,
             sentAt: ts.getTime(),
@@ -424,7 +415,7 @@ export default function ChatPage() {
                 : JSON.stringify(payload);
 
           const ts = sentAt ? new Date(sentAt) : new Date();
-          const timestamp = ts.toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" });
+          const timestamp = formatTimestamp(ts);
           const isSelf = senderId === selfId;
           const senderName = !isSelf ? peerMeta?.name ?? chatMeta?.name ?? "새 대화" : undefined;
           const senderAvatar = !isSelf ? peerMeta?.avatar ?? chatMeta?.avatar : undefined;
@@ -606,7 +597,7 @@ export default function ChatPage() {
       id: messageId,
       content,
       sender: "user",
-      timestamp: new Date().toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" }),
+      timestamp: formatTimestamp(new Date()),
       sentAt: Date.now(),
     };
 
