@@ -1,10 +1,12 @@
-import { NextResponse, type NextRequest } from "next/server";
-import { getToken } from "next-auth/jwt";
+import { NextResponse } from "next/server";
 import jwt from "jsonwebtoken";
+import { auth } from "@/auth";
 import { connectMongo } from "@/lib/mongoose";
 import { RoomMember } from "@/models/RoomMember";
+import { User } from "@/models/User";
 
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 const getSecret = () => {
   const secret = process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET;
@@ -12,11 +14,24 @@ const getSecret = () => {
   return secret;
 };
 
-export async function GET(req: NextRequest) {
+export async function GET() {
   const secret = getSecret();
-  const decoded = await getToken({ req, secret });
+  const session = await auth();
+  let userId = session?.user?.id;
 
-  const userId = (decoded as any)?.userId ?? decoded?.sub;
+  if (!userId) {
+    // fallback: resolve by email
+    const email = session?.user?.email;
+    if (!email) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    await connectMongo();
+    const user = await User.findOne({ email }).select("_id").lean<{ _id: any } | null>();
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    userId = user._id.toString();
+  }
 
   if (!userId) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
